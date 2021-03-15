@@ -132,6 +132,7 @@ public class Sender implements Runnable {
         // main loop, runs until close is called
         while (running) {
             try {
+                //TODO 循环执行
                 run(time.milliseconds());
             } catch (Exception e) {
                 log.error("Uncaught error in kafka producer I/O thread: ", e);
@@ -171,11 +172,35 @@ public class Sender implements Runnable {
      *            The current POSIX time in milliseconds
      */
     void run(long now) {
+
+        /**
+         *
+         * (1) 代码第一次执行:
+         * 获取元数据,根据场景驱动的方式.第一次代码进来,肯定还没有获取到元数据
+         * 所以这个cluster里面没有元数据,如果这儿没有元数据,这个方法里面接下来的代码就不用看了,因为接下来的这些代码都依赖这个元数据
+         *
+         *
+         * (2) 代码第二次执行:
+         * 场景驱动的方式,第二次代码进来
+         * 第二次进来的时候,已经有元数据了,所以cluster这儿有元数据
+         *
+         * 步骤一:获取元数据
+         */
         Cluster cluster = metadata.fetch();
         // get the list of partitions with data ready to send
+
+        /**
+         * 步骤二:
+         *      判断哪些partition有消息可以发送
+         *      场景驱动的方式,第一次代码进来的时候,这个步骤不会执行,因为没有元数据
+         */
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
+        /**
+         * 步骤三:标识还没有拉取到元数据的Topic
+         *
+         */
         if (!result.unknownLeaderTopics.isEmpty()) {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
@@ -190,31 +215,69 @@ public class Sender implements Runnable {
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            /**
+             * 步骤四: 检查与要发送数据的主机的网络是否已经建立好了
+             * 场景驱动 this.client.ready() = false 网络没有建立好
+             * 因为第一次进来的时候,连元数据都没有获取到,压根也不会知道数据要往哪个broker发送,所以网络连接肯定是没有建立好的,即false
+             *
+             */
             if (!this.client.ready(node, now)) {
+                // 如果返回的是false !false进来
+                // 移除 result里面要发送消息的主机
+                // 所以我们会看到这里所有的主机都会被移除了
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.connectionDelay(node, now));
             }
         }
 
+        /**
+         * 步骤五: 同一个服务器的多个batch封装成同一个请求, 进一步减少网络IO
+         * 我们要发送的partition有很多个,很可能有一些partition的leader partition在同一台服务器上面
+         *  假设集群有三台服务器 0    1   2
+         *  分区: p0 p1 p2 p3
+         *  p0:leader -> 0 一个批次发送一个请求
+         *  p1:leader -> 0
+         *
+         *  p2:leader -> 1 一个批次发送一个请求
+         *
+         *  p3:leader -> 2 一个批次发送一个请求
+         *
+         * 当分区的个数大于集群的节点数的时候,一定会存在上述所说的多个leader partition 在同一台服务器上面
+         * 按照broker进行分组,同一个broker的partition为一组
+         * 0:{p0,p1}    -> 一次批次
+         * 1:{p2}       -> 一次批次
+         * 2:{p3}       -> 一次批次
+         */
         // create produce requests
+        // 场景驱动,第一次代码进来,我们发现如果网路连接都没有建立的话,这里的代码是不执行的
         Map<Integer, List<RecordBatch>> batches = this.accumulator.drain(cluster,
                                                                          result.readyNodes,
                                                                          this.maxRequestSize,
                                                                          now);
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
+            // 如果batches为空,这里的代码不会执行了
             for (List<RecordBatch> batchList : batches.values()) {
                 for (RecordBatch batch : batchList)
                     this.accumulator.mutePartition(batch.topicPartition);
             }
         }
 
+        /**
+         * 步骤六: 对超时的批次是如何处理的?
+         */
         List<RecordBatch> expiredBatches = this.accumulator.abortExpiredBatches(this.requestTimeout, now);
         // update sensors
         for (RecordBatch expiredBatch : expiredBatches)
             this.sensors.recordErrors(expiredBatch.topicPartition.topic(), expiredBatch.recordCount);
 
         sensors.updateProduceRequestMetrics(batches);
+
+        /**
+         * 步骤七: 创建发送消息的请求
+         * 如果网络连接都没有建立好,batches其实是为空的,也就是说场景驱动第一次代码不会执行.
+         *
+         */
         List<ClientRequest> requests = createProduceRequests(batches, now);
         // If we have any nodes that are ready to send + have sendable data, poll with 0 timeout so this can immediately
         // loop and try sending more data. Otherwise, the timeout is determined by nodes that have partitions with data
@@ -226,13 +289,23 @@ public class Sender implements Runnable {
             log.trace("Created {} produce requests: {}", requests.size(), requests);
             pollTimeout = 0;
         }
+        //TODO 发送请求的操作
         for (ClientRequest request : requests)
+            //绑定 op_write
             client.send(request, now);
 
         // if some partitions are already ready to be sent, the select time would be 0;
         // otherwise if some partition already has some data accumulated but not ready yet,
         // the select time will be the time difference between now and its linger expiry time;
         // otherwise the select time will be the time difference between now and the metadata expiry time;
+        //TODO
+        // 重点就是看这个方法,就是用这个方法拉去集群的元数据.
+        /**
+         * 步骤八:
+         * 真正执行网路操作的都是这个NetWorkClient这个组件
+         * 包括: 发送请求,接收响应（处理响应）,拉去元数据信息 都是靠这段代码
+         */
+        //建立连接 NIO
         this.client.poll(pollTimeout, now);
     }
 

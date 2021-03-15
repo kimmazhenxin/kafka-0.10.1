@@ -147,14 +147,29 @@ public final class Metadata {
         if (maxWaitMs < 0) {
             throw new IllegalArgumentException("Max time to wait for metadata updates should not be < 0 milli seconds");
         }
+        //获取当前时间
         long begin = System.currentTimeMillis();
+        //看剩余可以使用的时间,一开始是最大的等待时间
         long remainingWaitMs = maxWaitMs;
+        //TODO
+        // version是元数据的版本号
+        // 如果当前的这个version小于等于上一次的version, 说明元数据还没更新
+        // 因为如果sender线程那儿更新元数据后.如果更新成功了,sender线程肯定会去累加这个version
         while (this.version <= lastVersion) {
+            // 如果还有剩余的时间
             if (remainingWaitMs != 0)
+                // 让当前线程阻塞等待
+                // 这里被缓存有两个情况:
+                //   1) 获取到元数据,被sender线程唤醒
+                //   2) 等待时间已经到了
                 wait(remainingWaitMs);
+            // 如果代码执行到了这里,说明就要么被唤醒,要么等待时间到了
             long elapsed = System.currentTimeMillis() - begin;
+            // 计算一下花了多少时间
             if (elapsed >= maxWaitMs)
+                // 抛出超时异常
                 throw new TimeoutException("Failed to update metadata after " + maxWaitMs + " ms.");
+            // 计算剩余时间,下次循环
             remainingWaitMs = maxWaitMs - elapsed;
         }
     }
@@ -199,10 +214,12 @@ public final class Metadata {
         this.needUpdate = false;
         this.lastRefreshMs = now;
         this.lastSuccessfulRefreshMs = now;
+        //TODO 首先获取到集群的元数据信息后,版本号要累加
         this.version += 1;
-
+        //默认值 TRUE
         if (topicExpiryEnabled) {
             // Handle expiry of topics from the metadata refresh set.
+            //TODO 学习这里的代码写法,使用了for循环而不是while循环(for比while性能好些)
             for (Iterator<Map.Entry<String, Long>> it = topics.entrySet().iterator(); it.hasNext(); ) {
                 Map.Entry<String, Long> entry = it.next();
                 long expireMs = entry.getValue();
@@ -220,12 +237,17 @@ public final class Metadata {
 
         String previousClusterId = cluster.clusterResource().clusterId();
 
+        //默认是false
         if (this.needMetadataForAllTopics) {
             // the listener may change the interested topics, which could cause another metadata refresh.
             // If we have already fetched all topics, however, another fetch should be unnecessary.
             this.needUpdate = false;
             this.cluster = getClusterForCurrentTopics(cluster);
         } else {
+            //代码执行到这
+            //直接把刚刚传进来的对象赋值给了这个cluster
+            //cluster代表的是kafka集群的元数据
+            //初始化的时候,这个update这个方法没有去服务端拉去数据
             this.cluster = cluster;
         }
 
@@ -237,6 +259,8 @@ public final class Metadata {
             clusterResourceListeners.onUpdate(cluster.clusterResource());
         }
 
+        //TODO 非常重要!!!
+        // 这个notifyAll最重要的一个作用就是唤醒之前说的那个wait的线程(主线程当时在等待sender线程获取到元数据)
         notifyAll();
         log.debug("Updated cluster metadata version {} to {}", this.version, this.cluster);
     }
