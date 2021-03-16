@@ -71,6 +71,7 @@ public class DefaultPartitioner implements Partitioner {
                 //12 % 10    2
                 //13 % 10    3
                 //......
+                //实现一个轮询的效果,能达到负载均衡
                 int part = Utils.toPositive(nextValue) % availablePartitions.size();
                 //根据这个值分配分区号
                 return availablePartitions.get(part).partition();
@@ -80,7 +81,7 @@ public class DefaultPartitioner implements Partitioner {
             }
         } else {
             // hash the keyBytes to choose a partition
-            //策略二:如果发送消息的时候,指定key,那么取key的hash值取余分区数,这样同一个key发送到一个分区上
+            //策略二:如果发送消息的时候,指定key,那么取key的hash值取余分区总数,这样同一个key发送到一个分区上
             return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
         }
     }

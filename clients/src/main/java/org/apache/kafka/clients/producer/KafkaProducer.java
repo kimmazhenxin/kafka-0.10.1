@@ -492,18 +492,33 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             ensureValidRecordSize(serializedSize);
 
             /**
-             *
+             * 步骤五: 根据元数据信息，封装分区对象
              */
             tp = new TopicPartition(record.topic(), partition);
             long timestamp = record.timestamp() == null ? time.milliseconds() : record.timestamp();
             log.trace("Sending record {} with callback {} to topic {} partition {}", record, callback, record.topic(), partition);
+
             // producer callback will make sure to call both 'callback' and interceptor callback
+            /**
+             * 步骤六：给每一条消息都绑定它的回调函数,因为我们使用的是异步的方式发送消息
+             */
             Callback interceptCallback = this.interceptors == null ? callback : new InterceptorCallback<>(callback, this.interceptors, tp);
+
+            /**
+             * TODO 非常重要!!!
+             *  步骤七: 把消息放入Accumulator消息缓冲区(32M的一个内存)中,然后由Accumulator把消息封装成一个批次一个批次的去发送
+             */
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey, serializedValue, interceptCallback, remainingWaitMs);
+            //TODO 如果批次满了,或者新建出来一个批次,那么唤醒 sender线程去发送消息
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
+                /**
+                 * TODO
+                 *  步骤八: 唤醒sender线程,它才是真正发送数据的线程
+                 */
                 this.sender.wakeup();
             }
+
             return result.future;
             // handling exceptions and record the errors;
             // for API exceptions return them in the future,
@@ -640,11 +655,14 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * Validate that the record size isn't too large
      */
     private void ensureValidRecordSize(int size) {
+        //如果一条消息的大小超过了默认值1M
         if (size > this.maxRequestSize)
+            //自定义异常(参考kafka的自定义异常)
             throw new RecordTooLargeException("The message is " + size +
                                               " bytes when serialized which is larger than the maximum request size you have configured with the " +
                                               ProducerConfig.MAX_REQUEST_SIZE_CONFIG +
                                               " configuration.");
+        //如果一条消息的大小超过了32M也会报错(不能超过消息缓存区大小)
         if (size > this.totalMemorySize)
             throw new RecordTooLargeException("The message is " + size +
                                               " bytes when serialized which is larger than the total memory buffer you have configured with the " +
