@@ -255,8 +255,17 @@ public class NetworkClient implements KafkaClient {
      */
     @Override
     public List<ClientResponse> poll(long timeout, long now) {
+        /**
+         * 这个方法里面有涉及到Kafka的网路的方法,但是目前kafka的网络还没有仔细去看,暂时粗粒度分析下,
+         * 详细的分析等分析完kafka的网络以后再回头看这段代码,其实是比较简单的
+         *
+         * 大概看一下如何获取到集群元数据的
+         */
+        //TODO 步骤一: 封装一个要拉去元数据的请求
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+            //TODO 步骤二: 发送请求,进行复杂的网络操作
+            // 执行网路IO操作     NIO
             this.selector.poll(Utils.min(timeout, metadataTimeout, requestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
@@ -266,9 +275,19 @@ public class NetworkClient implements KafkaClient {
         long updatedNow = this.time.milliseconds();
         List<ClientResponse> responses = new ArrayList<>();
         handleCompletedSends(responses, updatedNow);
+
+        //TODO 步骤三: 处理响应,响应里面就会有我们需要的元数据.
+        /**
+         * 这个地方是我们在看生产者是如何获取元数据的时候的流程
+         * 其实Kafka获取元数据的流程跟我们发送消息的流程是一模一样.
+         * 获取元数据 -> 判断网络连接是否建立好 -> 建立网络连接 -> 发送请求(获取元数据的请求) -> 服务端发送回来响应(带了集群的元数据信息)
+         */
         handleCompletedReceives(responses, updatedNow);
+
+
         handleDisconnections(responses, updatedNow);
         handleConnections();
+        //TODO 处理长时间没有接收到的请求
         handleTimedOutRequests(responses, updatedNow);
 
         // invoke callbacks
@@ -444,10 +463,21 @@ public class NetworkClient implements KafkaClient {
      */
     private void handleCompletedReceives(List<ClientResponse> responses, long now) {
         for (NetworkReceive receive : this.selector.completedReceives()) {
+            //获取broker id
             String source = receive.source();
+            /**
+             * kafka有这样的一个机制: 每个连接可以容忍5次batch数据发送出去了,但是还没接收到响应的请求
+             */
+            //从数据结构里面移除已经接收到响应的请求
+            //把之前存入进去的请求也获取到了
             ClientRequest req = inFlightRequests.completeNext(source);
+            //解析服务端发送回来的请求(里面有响应的结果数据)
             Struct body = parseResponse(receive.payload(), req.request().header());
+            //TODO 如果是关于元数据的响应,那么接下来开始处理
             if (!metadataUpdater.maybeHandleCompletedReceive(req, now, body))
+                //解析完了以后就把它封装成一个一个的ClientResponse
+                //body  存储的是响应的内容
+                //req   发送出去的那个请求信息
                 responses.add(new ClientResponse(req, now, false, body));
         }
     }
@@ -549,6 +579,7 @@ public class NetworkClient implements KafkaClient {
                 // Beware that the behavior of this method and the computation of timeouts for poll() are
                 // highly dependent on the behavior of leastLoadedNode.
                 Node node = leastLoadedNode(now);
+                //TODO 这里进行封装请求
                 maybeUpdate(now, node);
             }
 
@@ -579,6 +610,7 @@ public class NetworkClient implements KafkaClient {
         public boolean maybeHandleCompletedReceive(ClientRequest req, long now, Struct body) {
             short apiKey = req.request().header().apiKey();
             if (apiKey == ApiKeys.METADATA.id && req.isInitiatedByNetworkClient()) {
+                //TODO 处理响应
                 handleResponse(req.request().header(), body, now);
                 return true;
             }
@@ -592,7 +624,14 @@ public class NetworkClient implements KafkaClient {
 
         private void handleResponse(RequestHeader header, Struct body, long now) {
             this.metadataFetchInProgress = false;
+
+            //因为服务端发送回来的是一个二进制的一个数据结构
+            //生产者需要对这个数据结构进行解析
+            //解析完了以后就封装成一个MetadataResponse对象
             MetadataResponse response = new MetadataResponse(body);
+
+            //响应里面会带来元数据的信息
+            //获取到了服务端拉取的集群的元数据信息
             Cluster cluster = response.cluster();
             // check if any topics metadata failed to get updated
             Map<String, Errors> errors = response.errors();
@@ -601,7 +640,9 @@ public class NetworkClient implements KafkaClient {
 
             // don't update the cluster if there are no valid nodes...the topic we want may still be in the process of being
             // created which means we will get errors and no nodes until it exists
+            //正常获取到集群元数据信息
             if (cluster.nodes().size() > 0) {
+                //更新元数据的信息
                 this.metadata.update(cluster, now);
             } else {
                 log.trace("Ignoring empty metadata response with correlation id {}.", header.correlationId());
@@ -632,12 +673,20 @@ public class NetworkClient implements KafkaClient {
             if (canSendRequest(nodeConnectionId)) {
                 this.metadataFetchInProgress = true;
                 MetadataRequest metadataRequest;
+
                 if (metadata.needMetadataForAllTopics())
+                    //封装请求(获取所有topics)的元数据信息的请求
+                    //但是我们一般获取元数据的时候,只获取自己要发送消息的对应的Topic的元数据的信息
                     metadataRequest = MetadataRequest.allTopics();
                 else
+                    //默认我们走的这里的方法,就是拉取我们发送消息的对应的Topic的方法
                     metadataRequest = new MetadataRequest(new ArrayList<>(metadata.topics()));
+
+                //这儿就给我们创建了一个拉取元数据的请求
                 ClientRequest clientRequest = request(now, nodeConnectionId, metadataRequest);
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node.id());
+
+                //发送请求(这儿会存储要发送的请求)
                 doSend(clientRequest, now);
             } else if (connectionStates.canConnect(nodeConnectionId, now)) {
                 // we don't have a connection to this node right now, make one

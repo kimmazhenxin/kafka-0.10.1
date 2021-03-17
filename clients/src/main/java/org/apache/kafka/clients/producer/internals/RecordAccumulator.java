@@ -68,7 +68,7 @@ public final class RecordAccumulator {
     private final long retryBackoffMs;
     private final BufferPool free;
     private final Time time;
-    private final ConcurrentMap<TopicPartition, Deque<RecordBatch>> batches;
+    private final ConcurrentMap<TopicPartition, Deque<RecordBatch>> batches;//TODO 核心的数据结构!!!
     private final IncompleteRecordBatches incomplete;
     // The following variables are only accessed by the sender thread, so we don't need to protect them.
     private final Set<TopicPartition> muted;
@@ -163,22 +163,40 @@ public final class RecordAccumulator {
                                      long maxTimeToBlock) throws InterruptedException {
         // We keep track of the number of appending thread to make sure we do not miss batches in
         // abortIncompleteBatches().
+        //TODO 16K
         appendsInProgress.incrementAndGet();
         try {
             // check if we have an in-progress batch
-            Deque<RecordBatch> dq = getOrCreateDeque(tp);
+            /**
+             * 步骤一: 先根据分区找到应该插入到哪个队列里面
+             *      如果有已经存在的队列,那么就使用存在的列;否则新创建一个队列
+             *      注意: 一个分区对应一个队列
+             */
+            Deque<RecordBatch> dq = getOrCreateDeque(tp);//分区对应的队列
+            /**
+             * 这里假设有线程一、二、三
+             */
             synchronized (dq) {
                 if (closed)
                     throw new IllegalStateException("Cannot send after the producer is closed.");
+
+                /**
+                 * 步骤二:
+                 *      尝试往队列里面的批次添加数据
+                 */
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
+                //添加成功的话,直接返回
                 if (appendResult != null)
                     return appendResult;
-            }
+            }//TODO 释放锁(分段加锁的思想)
 
             // we don't have an in-progress record batch try to allocate a new batch
             int size = Math.max(this.batchSize, Records.LOG_OVERHEAD + Record.recordSize(key, value));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {}", size, tp.topic(), tp.partition());
+
             ByteBuffer buffer = free.allocate(size, maxTimeToBlock);
+
+
             synchronized (dq) {
                 // Need to check if producer is closed again after grabbing the dequeue lock.
                 if (closed)
@@ -197,7 +215,7 @@ public final class RecordAccumulator {
                 dq.addLast(batch);
                 incomplete.add(batch);
                 return new RecordAppendResult(future, dq.size() > 1 || batch.records.isFull(), true);
-            }
+            }//TODO 释放锁(分段加锁的思想)
         } finally {
             appendsInProgress.decrementAndGet();
         }

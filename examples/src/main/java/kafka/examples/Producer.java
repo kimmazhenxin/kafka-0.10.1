@@ -45,12 +45,21 @@ public class Producer extends Thread {
         while (true) {
             String messageStr = "Message_" + messageNo;
             long startTime = System.currentTimeMillis();
+            //isAsync kafka发送数据的时候,有两种方式
+            //1: 异步发送
+            //2: 同步发送
+            //isAsync: true的时候是异步发送; false就是同步发送
             if (isAsync) { // Send asynchronously
+                //TODO 异步发送
+                // 一直发送消息, 消息响应的结果交给回到函数处理
+                // 这样性能比较好(生产使用)
                 producer.send(new ProducerRecord<>(topic,
                     messageNo,
                     messageStr), new DemoCallBack(startTime, messageNo, messageStr));
             } else { // Send synchronously
                 try {
+                    //TODO 同步发送
+                    // 发送一条消息,等这条消息所有的后续工作都完成了以后才继续发送下一条消息
                     producer.send(new ProducerRecord<>(topic,
                         messageNo,
                         messageStr)).get();
