@@ -443,9 +443,19 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         TopicPartition tp = null;
         try {
             // first make sure the metadata for the topic is available
+            /**
+             * 步骤一:
+             *  waitOnMetadata 同步等待拉去元数据
+             *  maxBlockTimeMs 表示最多能等待多久
+             */
             ClusterAndWaitTime clusterAndWaitTime = waitOnMetadata(record.topic(), record.partition(), maxBlockTimeMs);
             long remainingWaitMs = Math.max(0, maxBlockTimeMs - clusterAndWaitTime.waitedOnMetadataMs);
             Cluster cluster = clusterAndWaitTime.cluster;
+
+            /**
+             * 步骤二:
+             *  读消息的key和value进行序列化
+             */
             byte[] serializedKey;
             try {
                 serializedKey = keySerializer.serialize(record.topic(), record.key());
@@ -469,11 +479,26 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             tp = new TopicPartition(record.topic(), partition);
             long timestamp = record.timestamp() == null ? time.milliseconds() : record.timestamp();
             log.trace("Sending record {} with callback {} to topic {} partition {}", record, callback, record.topic(), partition);
+
             // producer callback will make sure to call both 'callback' and interceptor callback
+            /**
+             * 步骤六:
+             *  给每一条消息懂绑定它的回调函数.
+             *  因为我们使用的是异步的方式发送消息.
+             */
             Callback interceptCallback = this.interceptors == null ? callback : new InterceptorCallback<>(callback, this.interceptors, tp);
+
+            /**
+             * 步骤七:
+             *
+             */
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey, serializedValue, interceptCallback, remainingWaitMs);
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
+                /**
+                 * 步骤八:
+                 *  唤醒Sender线程,它才是真正发送数据的线程
+                 */
                 this.sender.wakeup();
             }
             return result.future;
@@ -521,8 +546,14 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      */
     private ClusterAndWaitTime waitOnMetadata(String topic, Integer partition, long maxWaitMs) throws InterruptedException {
         // add topic to metadata topic list if it is not there already and reset expiry
+        // 把当前Topic存到元数据里面
         metadata.add(topic);
-        Cluster cluster = metadata.fetch();
+
+        // 在这使用场景驱动的方式,目前代码执行到的Producer端初始化完成
+        // 所以刚开始这个Cluster里面其实没有元数据
+        Cluster cluster = metadata.fetch(); // partiton Node
+
+        //根据当前
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
