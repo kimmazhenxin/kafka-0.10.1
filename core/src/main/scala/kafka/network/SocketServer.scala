@@ -90,12 +90,17 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
         val protocol = endpoint.protocolType
         val processorEndIndex = processorBeginIndex + numProcessorThreads
 
+        // 创建了三个Processor线程
         for (i <- processorBeginIndex until processorEndIndex)
           processors(i) = newProcessor(i, connectionQuotas, protocol)
 
+
+        //TODO 核心线程
         val acceptor = new Acceptor(endpoint, sendBufferSize, recvBufferSize, brokerId,
           processors.slice(processorBeginIndex, processorEndIndex), connectionQuotas)
+
         acceptors.put(endpoint, acceptor)
+
         Utils.newThread("kafka-socket-acceptor-%s-%d".format(protocol.toString, endpoint.port), acceptor, false).start()
         acceptor.awaitStartup()
 
@@ -239,22 +244,30 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
                               connectionQuotas: ConnectionQuotas) extends AbstractServerThread(connectionQuotas) with KafkaMetricsGroup {
 
   private val nioSelector = NSelector.open()
+
+  //TODO 启动了一个ServerSocket
   val serverChannel = openServerSocket(endPoint.host, endPoint.port)
 
+  //TODO 启动了刚刚创建的三个Processor线程
   this.synchronized {
     processors.foreach { processor =>
       Utils.newThread("kafka-network-thread-%d-%s-%d".format(brokerId, endPoint.protocolType.toString, processor.id), processor, false).start()
     }
   }
 
+
   /**
    * Accept loop that checks for new connection attempts
    */
   def run() {
+    //
     serverChannel.register(nioSelector, SelectionKey.OP_ACCEPT)
     startupComplete()
+
+
     try {
       var currentProcessor = 0
+      //服务端一直在循环监控这个nioSelector
       while (isRunning) {
         try {
           val ready = nioSelector.select(500)
@@ -265,12 +278,15 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
               try {
                 val key = iter.next
                 iter.remove()
+
                 if (key.isAcceptable)
+                  //到这个accept方法里面去处理
                   accept(key, processors(currentProcessor))
                 else
                   throw new IllegalStateException("Unrecognized key state for acceptor thread.")
 
                 // round robin to the next processor thread
+                // 三个Processor线程轮询处理客户端的请求
                 currentProcessor = (currentProcessor + 1) % processors.length
               } catch {
                 case e: Throwable => error("Error while accepting connection", e)
@@ -337,6 +353,7 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
                   socketChannel.socket.getSendBufferSize, sendBufferSize,
                   socketChannel.socket.getReceiveBufferSize, recvBufferSize))
 
+      //TODO 重点!!! processor线程调用accept方法对socketChannel进行处理
       processor.accept(socketChannel)
     } catch {
       case e: TooManyConnectionsException =>
@@ -382,6 +399,7 @@ private[kafka] class Processor(val id: Int,
     override def toString: String = s"$localHost:$localPort-$remoteHost:$remotePort"
   }
 
+  //连接队列
   private val newConnections = new ConcurrentLinkedQueue[SocketChannel]()
   private val inflightResponses = mutable.Map[String, RequestChannel.Response]()
   private val metricTags = Map("networkProcessor" -> id.toString).asJava
@@ -405,17 +423,29 @@ private[kafka] class Processor(val id: Int,
     false,
     ChannelBuilders.create(protocol, Mode.SERVER, LoginType.SERVER, channelConfigs, null, true))
 
+  //TODO 核心处理代码
   override def run() {
     startupComplete()
     while (isRunning) {
       try {
         // setup any new connections that have been queued up
+        //TODO 1)
         configureNewConnections()
+
         // register any new responses for writing
+        //TODO 2) 绑定OP_WRITE
         processNewResponses()
+
+        //TODO 3) !!!读取和发送客户端的请求代码都是在这个方法里面完成的
         poll()
+
+        //TODO 4)
         processCompletedReceives()
+
+        //TODO 5)
         processCompletedSends()
+
+        //TODO 6)
         processDisconnected()
       } catch {
         // We catch all the throwables here to prevent the processor thread from exiting. We do this because
@@ -490,7 +520,11 @@ private[kafka] class Processor(val id: Int,
         val session = RequestChannel.Session(new KafkaPrincipal(KafkaPrincipal.USER_TYPE, channel.principal.getName),
           channel.socketAddress)
         val req = RequestChannel.Request(processor = id, connectionId = receive.source, session = session, buffer = receive.payload, startTimeMs = time.milliseconds, securityProtocol = protocol)
+
+        //TODO 把request请求放入请求队列requestQueue中
         requestChannel.sendRequest(req)
+
+        //TODO 取消OP_READ事件
         selector.mute(receive.source)
       } catch {
         case e @ (_: InvalidRequestException | _: SchemaException) =>
@@ -543,6 +577,8 @@ private[kafka] class Processor(val id: Int,
         val remoteHost = channel.socket().getInetAddress.getHostAddress
         val remotePort = channel.socket().getPort
         val connectionId = ConnectionId(localHost, localPort, remoteHost, remotePort).toString
+
+        //TODO 注册OP_READ事件,接收客户端发送过来的请求
         selector.register(connectionId, channel)
       } catch {
         // We explicitly catch all non fatal exceptions and close the socket to avoid a socket leak. The other

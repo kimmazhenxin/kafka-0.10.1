@@ -63,7 +63,7 @@ object Kafka extends Logging {
           kafkaServerStartable.shutdown
         }
       })
-
+      //TODO 核心代码
       kafkaServerStartable.startup
       kafkaServerStartable.awaitShutdown
     }

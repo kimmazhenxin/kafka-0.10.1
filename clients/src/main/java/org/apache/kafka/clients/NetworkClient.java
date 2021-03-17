@@ -287,11 +287,12 @@ public class NetworkClient implements KafkaClient {
 
         handleDisconnections(responses, updatedNow);
         handleConnections();
-        //TODO 处理长时间没有接收到的请求
+        //TODO 处理长时间没有接收到响应的请求
         handleTimedOutRequests(responses, updatedNow);
 
         // invoke callbacks
         for (ClientResponse response : responses) {
+            //如果请求的响应中有回调函数,开始处理
             if (response.request().hasCallback()) {
                 try {
                     response.request().callback().onComplete(response);
@@ -473,7 +474,7 @@ public class NetworkClient implements KafkaClient {
             ClientRequest req = inFlightRequests.completeNext(source);
             //解析服务端发送回来的请求(里面有响应的结果数据)
             Struct body = parseResponse(receive.payload(), req.request().header());
-            //TODO 如果是关于元数据的响应,那么接下来开始处理
+            //TODO 如果不是关于元数据的响应,那么接下来开始处理
             if (!metadataUpdater.maybeHandleCompletedReceive(req, now, body))
                 //解析完了以后就把它封装成一个一个的ClientResponse
                 //body  存储的是响应的内容

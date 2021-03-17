@@ -422,6 +422,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
 
       // call the replica manager to append messages to the replicas
+      // TODO 写入数据到磁盘,其中回调函数是返回响应
       replicaManager.appendMessages(
         produceRequest.timeout.toLong,
         produceRequest.acks,
