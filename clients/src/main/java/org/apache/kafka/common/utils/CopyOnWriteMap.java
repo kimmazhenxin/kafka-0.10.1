@@ -137,6 +137,10 @@ public class CopyOnWriteMap<K, V> implements ConcurrentMap<K, V> {
         //插入数据
         V prev = copy.put(k, v);
         //赋值给map,由于map是volatile修饰的,能保证这一步map改变后其它线程的可见性
+        //TODO
+        // 关于Collections.unmodifiableMap(copy):
+        //  该方法返回了一个map的不可修改的视图umap,
+        //  为用户提供了一种生成只读容器的方法。如果尝试修改该容器umap, 将会抛出UnsupportedOperationException异常。
         this.map = Collections.unmodifiableMap(copy);
         return prev;
     }
