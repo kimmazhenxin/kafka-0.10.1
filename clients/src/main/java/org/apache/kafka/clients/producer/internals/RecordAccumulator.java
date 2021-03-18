@@ -68,7 +68,10 @@ public final class RecordAccumulator {
     private final long retryBackoffMs;
     private final BufferPool free;
     private final Time time;
+
+    // TopicPartition -> 分区    Deque -> 队列, 每个分区对应一个队列,每个队列里面有对个批次(一个分区发送多批次数据)
     private final ConcurrentMap<TopicPartition, Deque<RecordBatch>> batches;//TODO 核心的数据结构!!!
+
     private final IncompleteRecordBatches incomplete;
     // The following variables are only accessed by the sender thread, so we don't need to protect them.
     private final Set<TopicPartition> muted;
@@ -103,7 +106,11 @@ public final class RecordAccumulator {
         this.compression = compression;
         this.lingerMs = lingerMs;
         this.retryBackoffMs = retryBackoffMs;
+
+        //JUC包下面有个 CopyOnWriteArrayList数据结构
+        //但是这里的 CopyOnWriteMap 是Kafka自己设计的一个数据结构,这个数据结构非常的巧妙
         this.batches = new CopyOnWriteMap<>();
+
         String metricGrpName = "producer-metrics";
         this.free = new BufferPool(totalSize, batchSize, metrics, time, metricGrpName);
         this.incomplete = new IncompleteRecordBatches();
@@ -163,7 +170,7 @@ public final class RecordAccumulator {
                                      long maxTimeToBlock) throws InterruptedException {
         // We keep track of the number of appending thread to make sure we do not miss batches in
         // abortIncompleteBatches().
-        //TODO 16K
+        //JUC原子类,自增加1
         appendsInProgress.incrementAndGet();
         try {
             // check if we have an in-progress batch
@@ -173,7 +180,9 @@ public final class RecordAccumulator {
              *      注意: 一个分区对应一个队列
              */
             Deque<RecordBatch> dq = getOrCreateDeque(tp);//分区对应的队列
+
             /**
+             * 加锁,保证线程安全,因为append是高并发方法.
              * 这里假设有线程一、二、三
              */
             synchronized (dq) {
@@ -182,7 +191,7 @@ public final class RecordAccumulator {
 
                 /**
                  * 步骤二:
-                 *      尝试往队列里面的批次添加数据
+                 *      尝试往队列里面的批次里添加数据
                  */
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
                 //添加成功的话,直接返回
@@ -190,28 +199,59 @@ public final class RecordAccumulator {
                     return appendResult;
             }//TODO 释放锁(分段加锁的思想)
 
+
             // we don't have an in-progress record batch try to allocate a new batch
+            /**
+             * 步骤三:
+             *
+             *
+             */
+
             int size = Math.max(this.batchSize, Records.LOG_OVERHEAD + Record.recordSize(key, value));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {}", size, tp.topic(), tp.partition());
 
+            /**
+             * 步骤四:
+             *      根据上述的size值分配该批次的内存大小(内存池)
+             */
             ByteBuffer buffer = free.allocate(size, maxTimeToBlock);
 
 
+            //TODO 继续加锁
             synchronized (dq) {
                 // Need to check if producer is closed again after grabbing the dequeue lock.
                 if (closed)
                     throw new IllegalStateException("Cannot send after the producer is closed.");
 
+                /**
+                 * 步骤五:
+                 *      尝试把消息数据写入到该批次里面
+                 *
+                 */
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
+
+                // appendResult不等于null,说明插入成功
                 if (appendResult != null) {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
+
+                    // 线程二到这里,其实它自己已经把数据写到了队列的批次里,所以它之前申请的内存buffer就不需要了
+                    // 释放内存,它的内存就没什么作用了,把这个内存释放还给内存池
                     free.deallocate(buffer);
                     return appendResult;
                 }
+
+                /**
+                 * 步骤六:
+                 *      根据内存大小封装批次batch
+                 */
                 MemoryRecords records = MemoryRecords.emptyRecords(buffer, compression, this.batchSize);
                 RecordBatch batch = new RecordBatch(tp, records, time.milliseconds());
                 FutureRecordMetadata future = Utils.notNull(batch.tryAppend(timestamp, key, value, callback, time.milliseconds()));
 
+                /**
+                 * 步骤七:
+                 *      把这个批次放入到队列的队尾
+                 */
                 dq.addLast(batch);
                 incomplete.add(batch);
                 return new RecordAppendResult(future, dq.size() > 1 || batch.records.isFull(), true);
