@@ -31,10 +31,15 @@ public class Producer extends Thread {
 
     public Producer(String topic, Boolean isAsync) {
         Properties props = new Properties();
+        //用于拉取Kafka的元数据,每个broker的元数据是一致且完整的,但是一般写三个,防止Broker挂掉
         props.put("bootstrap.servers", "localhost:9092");
         props.put("client.id", "DemoProducer");
+
+        //设置K、V的序列化类,因为网路传输是二进制的格式
         props.put("key.serializer", "org.apache.kafka.common.serialization.IntegerSerializer");
         props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        //相反,消费者消费的时候就需要反序列化
+        //TODO 初始化KafkaProducer
         producer = new KafkaProducer<>(props);
         this.topic = topic;
         this.isAsync = isAsync;
@@ -42,6 +47,7 @@ public class Producer extends Thread {
 
     public void run() {
         int messageNo = 1;
+        //循环一直往Kafka发送数据
         while (true) {
             String messageStr = "Message_" + messageNo;
             long startTime = System.currentTimeMillis();
@@ -51,7 +57,7 @@ public class Producer extends Thread {
             //isAsync: true的时候是异步发送; false就是同步发送
             if (isAsync) { // Send asynchronously
                 //TODO 异步发送
-                // 一直发送消息, 消息响应的结果交给回到函数处理
+                // 一直发送消息, 消息响应的结果交给回调函数处理
                 // 这样性能比较好(生产使用)
                 producer.send(new ProducerRecord<>(topic,
                     messageNo,
@@ -95,6 +101,7 @@ class DemoCallBack implements Callback {
      * @param exception The exception thrown during processing of this record. Null if no error occurred.
      */
     public void onCompletion(RecordMetadata metadata, Exception exception) {
+        //回调函数执行onCompletion方法,根据自己的逻辑处理
         long elapsedTime = System.currentTimeMillis() - startTime;
         if (metadata != null) {
             System.out.println(
@@ -102,6 +109,7 @@ class DemoCallBack implements Callback {
                     "), " +
                     "offset(" + metadata.offset() + ") in " + elapsedTime + " ms");
         } else {
+            //此时说明发送有异常,一般在生产里面,还会有其他备用链路来保证数据不丢
             exception.printStackTrace();
         }
     }
