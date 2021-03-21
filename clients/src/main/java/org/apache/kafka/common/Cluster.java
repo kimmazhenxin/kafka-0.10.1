@@ -30,14 +30,23 @@ import java.util.Set;
 public final class Cluster {
 
     private final boolean isBootstrapConfigured;
+    //集群的broker节点,这个参数代表的就是kafka的服务器的信息
     private final List<Node> nodes;
+    //没有授权的Topic
     private final Set<String> unauthorizedTopics;
     private final Set<String> internalTopics;
+
+    //代表的是一个partition和partition对应的信息,partition有副本
     private final Map<TopicPartition, PartitionInfo> partitionsByTopicPartition;
+    //一个Topic对应有哪些分区
     private final Map<String, List<PartitionInfo>> partitionsByTopic;
+    //一个Topic对应有哪些可用的分区
     private final Map<String, List<PartitionInfo>> availablePartitionsByTopic;
+    //一台服务器上面有哪些partition,服务器编号 0,1, 2, 3...
     private final Map<Integer, List<PartitionInfo>> partitionsByNode;
+    //节点信息
     private final Map<Integer, Node> nodesById;
+    //Kafka集群的id信息
     private final ClusterResource clusterResource;
 
     /**

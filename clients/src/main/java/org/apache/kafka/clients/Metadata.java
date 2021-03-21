@@ -50,14 +50,24 @@ public final class Metadata {
     public static final long TOPIC_EXPIRY_MS = 5 * 60 * 1000;
     private static final long TOPIC_EXPIRY_NEEDS_UPDATE = -1L;
 
+    //两个更新元数据的请求的最小的时间间隔,默认值是100ms,目的是减少网络开销
     private final long refreshBackoffMs;
+    //生产者客户端多久自动更新一次元数据,默认值是5分值更新一次
     private final long metadataExpireMs;
+    //对于producer端来说,元数据是有版本号
+    //每次更新元数据,都会修改一下这个版本号
     private int version;
+    //上一次更新元数据的时间
     private long lastRefreshMs;
+    //上一次成功更新元数据的时间
+    //如果是正常情况下,如果每次都更新成了,那么lastRefreshMs和lastSuccessfulRefreshMs应该是相同的
     private long lastSuccessfulRefreshMs;
+    //Kafka集群本身的元数据
     private Cluster cluster;
+    //这是一个标识符,用来判断是否更新元数据的标识之一
     private boolean needUpdate;
     /* Topics with expiry time */
+    //记录当前已有的Topic
     private final Map<String, Long> topics;
     private final List<Listener> listeners;
     private final ClusterResourceListeners clusterResourceListeners;

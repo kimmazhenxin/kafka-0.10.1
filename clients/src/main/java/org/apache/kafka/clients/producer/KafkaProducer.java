@@ -258,7 +258,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
 
             //TODO Kafka集群的元数据配置
-            // 生产者需要从服务端那里拉取Kafka集群的元数据信息,需要发送网路请求
+            // 生产者需要从服务端那里拉取Kafka集群的元数据信息,需要发送网络请求
             // 设置时间间隔,也就是生产者每隔一段时间都要去重新获取集群信息来更新一下生产者端的元数据
             // metadata.max.age.ms(默认是5分钟)
             this.metadata = new Metadata(retryBackoffMs, config.getLong(ProducerConfig.METADATA_MAX_AGE_CONFIG), true, clusterResourceListeners);
