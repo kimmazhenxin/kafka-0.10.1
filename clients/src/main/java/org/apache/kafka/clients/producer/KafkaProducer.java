@@ -617,18 +617,19 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         metadata.add(topic);
         //场景驱动,当代码执行到Producer端初始化完成,这里这个Cluster里面其实没有元数据
         // 在这使用场景驱动的方式,目前代码执行到的Producer端初始化完成
-        // 所以刚开始这个Cluster里面其实没有元数据
+        // 所以刚开始这个Cluster里面其实没有元数据,真正这个Cluster有元数据要等到获取完元数据之后
         Cluster cluster = metadata.fetch();
 
-        //根据当前的Topic从这个集群的cluster元数据信息里面查看分区的信息
+        //根据当前的Topic从这个集群的cluster元数据信息里面查看分区的信息,分区的个数
         //因为是第一次执行代码,这里肯定是没有对应的分区的信息的
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
 
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
-        //如果元数据里面获取到了分区信息执行以下步骤(第一次执行不会走,因为没有元数据)
+        //如果元数据里面获取到了分区信息,则执行以下步骤(第一次执行不会走,因为没有元数据)
+        //当发送消息失败的时候,Kafka会进行重试,这时候的元数据信息就不会为null,因为之前已经获取过了,那么直接执行下面步骤返回.
         if (partitionsCount != null && (partition == null || partition < partitionsCount))
-            //直接返回cluster元数据信息,拉去元数据花的时间
+            //直接返回cluster元数据信息,获取元数据花的时间
             return new ClusterAndWaitTime(cluster, 0);
 
         //TODO 如果代码执行到这,说明前面没有获取到元数据,真地需要去服务端拉去元数据
@@ -660,9 +661,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
              *   1. 发送消息(发送网络请求 -> 接收响应)
              *   2. 获取集群的元数据信息(发送网络请求 -> 接收响应)
              */
-            sender.wakeup(); //sender线程去执行
+            sender.wakeup(); //sender线程去执行元数据的获取
             try {
-                //TODO 同步等待sender线程元数据获取结果
+                //TODO 同步等待sender线程获取元数据结果
                 // 这里是同步等待,主线程在等待sender线程获取到Kafka集群的元数据,然后sender线程肯定会唤醒主线程继续执行
                 // 主线程在wait等待
                 metadata.awaitUpdate(version, remainingWaitMs);
@@ -698,7 +699,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
         // 返回一个对象
         // 参数一: 集群的元数据
-        // 参数二: 代表的是拉去元数据花费的时间
+        // 参数二: 代表的是获取元数据花费的时间
         return new ClusterAndWaitTime(cluster, elapsed);
     }
 

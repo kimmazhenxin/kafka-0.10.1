@@ -168,10 +168,10 @@ public final class Metadata {
         while (this.version <= lastVersion) {
             // 如果还有剩余的时间
             if (remainingWaitMs != 0)
-                // 让当前线程阻塞等待
-                // 这里被缓存有两个情况:
-                //   1) 获取到元数据,被sender线程唤醒
-                //   2) 等待时间已经到了
+                // 这里是让当前主线程阻塞等待
+                // 这里被唤醒有两个情况:
+                //   1) Sender后台线程获取到元数据,被sender线程唤醒
+                //   2) 主线程等待时间已经到了
                 wait(remainingWaitMs);
             // 如果代码执行到了这里,说明就要么被唤醒,要么等待时间到了
             long elapsed = System.currentTimeMillis() - begin;
@@ -255,9 +255,9 @@ public final class Metadata {
             this.cluster = getClusterForCurrentTopics(cluster);
         } else {
             //代码执行到这
-            //直接把刚刚传进来的对象赋值给了这个cluster
+            //直接把刚刚传进来的对象赋值给了这个cluster,这个时候Metadata中就有了cluster的信息
             //cluster代表的是kafka集群的元数据
-            //初始化的时候,这个update这个方法没有去服务端拉去数据
+            //初始化的时候,这个update这个方法没有去服务端拉取数据
             this.cluster = cluster;
         }
 

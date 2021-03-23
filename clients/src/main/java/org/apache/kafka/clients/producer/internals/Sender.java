@@ -121,9 +121,11 @@ public class Sender implements Runnable {
         log.debug("Starting Kafka producer I/O thread.");
 
         // main loop, runs until close is called
+        // 这里就是 一个死循环,然后一直运行
+        // 在KafkaProducer的初始化时候,已经启动了Sender线程,它是一直在运行的
         while (running) {
             try {
-                //TODO 循环执行
+                //TODO 循环执行,核心代码
                 run(time.milliseconds());
             } catch (Exception e) {
                 log.error("Uncaught error in kafka producer I/O thread: ", e);
@@ -283,7 +285,7 @@ public class Sender implements Runnable {
         }
         //TODO 发送请求的操作
         for (ClientRequest request : requests)
-            //绑定 op_write
+            //绑定 op_write事件
             client.send(request, now);
 
         // if some partitions are already ready to be sent, the select time would be 0;
@@ -293,9 +295,9 @@ public class Sender implements Runnable {
         //TODO
         // 重点就是看这个方法,就是用这个方法拉去集群的元数据.
         /**
-         * 步骤八:
-         * 真正执行网路操作的都是这个NetWorkClient这个组件
-         * 包括: 发送请求,接收响应（处理响应）,拉去元数据信息 都是靠这段代码
+         * 步骤八: 拉取元数据(代码第一次进来只会执行步骤八)
+         * 真正执行网络操作的都是这个NetWorkClient这个组件
+         * 包括: 发送请求,接收响应（处理响应）,拉取元数据信息 都是靠这段代码
          */
         //建立连接 NIO
         this.client.poll(pollTimeout, now);
