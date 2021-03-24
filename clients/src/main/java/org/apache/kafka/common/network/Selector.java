@@ -239,6 +239,7 @@ public class Selector implements Selectable {
     public void send(Send send) {
         KafkaChannel channel = channelOrFail(send.destination());
         try {
+            //设置发送请求,主要是绑定OP_WRITE事件
             channel.setSend(send);
         } catch (CancelledKeyException e) {
             this.failedSends.add(send.destination());
@@ -288,6 +289,7 @@ public class Selector implements Selectable {
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());
 
         if (readyKeys > 0 || !immediatelyConnectedKeys.isEmpty()) {
+            //TODO 执行poll读写操作
             pollSelectionKeys(this.nioSelector.selectedKeys(), false, endSelect);
             pollSelectionKeys(immediatelyConnectedKeys, true, endSelect);
         }

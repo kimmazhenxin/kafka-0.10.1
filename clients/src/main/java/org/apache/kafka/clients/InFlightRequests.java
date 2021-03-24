@@ -24,8 +24,9 @@ import java.util.Map;
  * The set of requests which have been sent or are being sent but haven't yet received a response
  */
 final class InFlightRequests {
-
+    //TODO 每个连接（也就是客户端与Node 之间的连接）最多缓存的请求数,默认值是5
     private final int maxInFlightRequestsPerConnection;
+    //key:NodeId,节点的编号
     private final Map<String, Deque<ClientRequest>> requests = new HashMap<>();
 
     public InFlightRequests(int maxInFlightRequestsPerConnection) {

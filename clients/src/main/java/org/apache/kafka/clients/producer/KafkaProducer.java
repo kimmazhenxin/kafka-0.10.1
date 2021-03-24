@@ -646,7 +646,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         do {
             log.trace("Requesting metadata update for topic {}.", topic);
             //TODO
-            // 1) 获取当前元数据的版本:
+            // 1) 获取当前元数据的版本:初始化的时候默认值是0
             //      在Producer管理元数据的时候,对于它来说元数据是有版本号的.
             //      每次成功更新元数据,都会递增这个版本号
             // 2) 把 needUpdate 标识符赋值为true

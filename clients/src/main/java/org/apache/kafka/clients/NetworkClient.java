@@ -235,13 +235,15 @@ public class NetworkClient implements KafkaClient {
         String nodeId = request.request().destination();
         if (!canSendRequest(nodeId))
             throw new IllegalStateException("Attempt to send a request to node " + nodeId + " which is not ready.");
+        //发送请求的相关设置
         doSend(request, now);
     }
 
     private void doSend(ClientRequest request, long now) {
         request.setSendTimeMs(now);
+        //TODO 发送请求前将请求添加到 InFlightRequests 中,主要作用是缓存了已经发出去但还没有收到响应的请求,后续用于判断是否己经堆积了很多未响应的消息
         this.inFlightRequests.add(request);
-        //TODO 发送请求
+        //TODO 发送请求,本质是绑定一个OP_WRITE事件
         selector.send(request.request());
     }
 
@@ -262,10 +264,12 @@ public class NetworkClient implements KafkaClient {
          *
          * 大概看一下如何获取到集群元数据的
          */
-        //TODO 步骤一: 封装一个要拉取元数据的请求,发送请求
+        //TODO 步骤一: 执行是不是需要更新元数据的请求,如果是,则执行下面相关步骤1、2;如果不是,那么直接就返回元数据的超时时间metadataTimeout
+        //  1) 封装一个要拉取元数据的请求 ClientRequest
+        //  2) send 发送请求的相关设置,主要是OP_WRITE事件的绑定
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
-            //TODO 步骤二: 发送请求,进行复杂的网络操作
+            //TODO 步骤二: 真正的开始发送请求,进行复杂的网络操作
             // 执行网络IO操作    NIO
             this.selector.poll(Utils.min(timeout, metadataTimeout, requestTimeoutMs));
         } catch (IOException e) {
@@ -293,6 +297,7 @@ public class NetworkClient implements KafkaClient {
         handleTimedOutRequests(responses, updatedNow);
 
         // invoke callbacks
+        //TODO 回调函数的处理
         for (ClientResponse response : responses) {
             //如果请求的响应中有回调函数,开始处理
             if (response.request().hasCallback()) {
@@ -473,10 +478,12 @@ public class NetworkClient implements KafkaClient {
              */
             //从数据结构里面移除已经接收到响应的请求
             //把之前存入进去的请求也获取到了
+            //inFlightRequests的队列中每次请求从头插入,所以队列的最后元素肯定是最早的请求
             ClientRequest req = inFlightRequests.completeNext(source);
             //解析服务端发送回来的请求(里面有响应的结果数据)
             Struct body = parseResponse(receive.payload(), req.request().header());
-            //TODO 如果是关于元数据的响应,那么接下来开始处理响应 maybeHandleCompletedReceive方法
+            //TODO 如果是关于元数据的响应,那么接下来开始处理响应
+            // maybeHandleCompletedReceive方法:处理请求的响应,如果是元数据响应,返回true;否则返回false
             if (!metadataUpdater.maybeHandleCompletedReceive(req, now, body))
                 //解析完了以后就把它封装成一个一个的ClientResponse
                 //body  存储的是响应的内容
@@ -579,10 +586,11 @@ public class NetworkClient implements KafkaClient {
                     waitForMetadataFetch);
 
             if (metadataTimeout == 0) {
+                // TODO 如果代码走到这里,说明此时是需要更新元数据的请求,否则就是普通的发送数据请求
                 // Beware that the behavior of this method and the computation of timeouts for poll() are
                 // highly dependent on the behavior of leastLoadedNode.
                 Node node = leastLoadedNode(now);
-                //TODO 这里进行封装请求
+                //TODO 重点!!!,这里进行封装请求,存储要发送的元数据信息请求,绑定OP_WRITE事件
                 maybeUpdate(now, node);
             }
 
@@ -613,7 +621,7 @@ public class NetworkClient implements KafkaClient {
         public boolean maybeHandleCompletedReceive(ClientRequest req, long now, Struct body) {
             short apiKey = req.request().header().apiKey();
             if (apiKey == ApiKeys.METADATA.id && req.isInitiatedByNetworkClient()) {
-                //TODO 处理响应
+                //TODO 核心点:处理响应
                 handleResponse(req.request().header(), body, now);
                 return true;
             }
@@ -645,7 +653,7 @@ public class NetworkClient implements KafkaClient {
             // created which means we will get errors and no nodes until it exists
             //正常获取到集群元数据信息
             if (cluster.nodes().size() > 0) {
-                //TODO 重点!!! 更新元数据的信息
+                //TODO 重点!!! 主要做三件事: 更新元数据的信息,版本号,唤醒等待的主线程
                 this.metadata.update(cluster, now);
             } else {
                 log.trace("Ignoring empty metadata response with correlation id {}.", header.correlationId());
@@ -690,7 +698,9 @@ public class NetworkClient implements KafkaClient {
                 ClientRequest clientRequest = request(now, nodeConnectionId, metadataRequest);
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node.id());
 
-                //TODO 发送请求(这儿会存储要发送的请求)
+                //TODO 发送请求的设置
+                // 1) 这儿会存储要发送的请求 inFlightRequests中添加
+                // 2) 设置发送请求,主要是绑定OP_WRITE事件
                 doSend(clientRequest, now);
             } else if (connectionStates.canConnect(nodeConnectionId, now)) {
                 // we don't have a connection to this node right now, make one

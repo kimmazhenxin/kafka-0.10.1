@@ -224,7 +224,7 @@ public final class Metadata {
         this.needUpdate = false;
         this.lastRefreshMs = now;
         this.lastSuccessfulRefreshMs = now;
-        //TODO 首先获取到集群的元数据信息后,版本号要累加
+        //TODO 1)首先获取到集群的元数据信息后,版本号要累加
         this.version += 1;
         //默认值 TRUE
         if (topicExpiryEnabled) {
@@ -254,10 +254,10 @@ public final class Metadata {
             this.needUpdate = false;
             this.cluster = getClusterForCurrentTopics(cluster);
         } else {
-            //代码执行到这
-            //直接把刚刚传进来的对象赋值给了这个cluster,这个时候Metadata中就有了cluster的信息
-            //cluster代表的是kafka集群的元数据
-            //初始化的时候,这个update这个方法没有去服务端拉取数据
+            //TODO 2) 代码执行到这
+            //  直接把刚刚传进来的对象赋值给了这个cluster,这个时候Metadata中就有了cluster的信息
+            //  cluster代表的是kafka集群的元数据
+            //  初始化的时候,这个update这个方法没有去服务端拉取数据
             this.cluster = cluster;
         }
 
@@ -269,7 +269,7 @@ public final class Metadata {
             clusterResourceListeners.onUpdate(cluster.clusterResource());
         }
 
-        //TODO 非常重要!!!
+        //TODO 3) 非常重要!!!
         // 这个notifyAll最重要的一个作用就是唤醒之前说的那个wait的线程(主线程当时在等待sender线程获取到元数据)
         notifyAll();
         log.debug("Updated cluster metadata version {} to {}", this.version, this.cluster);

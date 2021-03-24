@@ -28,6 +28,7 @@ import java.security.Principal;
 
 public class KafkaChannel {
     private final String id;
+    //传输层
     private final TransportLayer transportLayer;
     private final Authenticator authenticator;
     private final int maxReceiveSize;
@@ -120,7 +121,7 @@ public class KafkaChannel {
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress.");
         this.send = send;
-        //TODO 关键代码
+        //TODO 关键代码,绑定OP_WRITE事件
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
@@ -156,6 +157,7 @@ public class KafkaChannel {
     private boolean send(Send send) throws IOException {
         send.writeTo(transportLayer);
         if (send.completed())
+            //TODO 发送完后,移除OP_WRITE事件
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
 
         return send.completed();
