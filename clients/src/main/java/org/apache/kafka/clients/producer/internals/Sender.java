@@ -200,6 +200,7 @@ public class Sender implements Runnable {
             // and request metadata update, since there are messages to send to the topic.
             for (String topic : result.unknownLeaderTopics)
                 this.metadata.add(topic);
+            //更新元数据的请求
             this.metadata.requestUpdate();
         }
 

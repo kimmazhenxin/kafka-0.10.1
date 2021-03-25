@@ -66,7 +66,7 @@ public final class RecordAccumulator {
     private final CompressionType compression;
     private final long lingerMs;
     private final long retryBackoffMs;
-    private final BufferPool free;
+    private final BufferPool free;  //TODO 核心:内存池
     private final Time time;
 
     // TopicPartition -> 分区    Deque -> 队列, 每个分区对应一个队列,每个队列里面有对个批次(一个分区发送多批次数据)
@@ -175,7 +175,7 @@ public final class RecordAccumulator {
         try {
             // check if we have an in-progress batch
             /**
-             * 步骤一: 先根据分区找到应该插入到哪个队列里面
+             * 步骤一: 先根据分区对象找到应该插入到哪个队列里面
              *      如果有已经存在的队列,那么就使用存在的列;否则新创建一个队列
              *      注意: 一个分区对应一个队列
              */
@@ -192,6 +192,9 @@ public final class RecordAccumulator {
                 /**
                  * 步骤二:
                  *      尝试往队列里面的批次里添加数据
+                 *      一开始添加数据肯定是失败的,目前只是获取到了队列Deque
+                 *      数据是需要存储在批次对象 RecordBatch里面的(这个批次对象是需要分配内存的)
+                 *      目前针对批次对象还没有分配内存,所以在场景驱动的情况下第一次代码到这肯定返回的是Null
                  */
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
                 //添加成功的话,直接返回
@@ -202,11 +205,16 @@ public final class RecordAccumulator {
 
             // we don't have an in-progress record batch try to allocate a new batch
             /**
-             * 步骤三:
+             * 步骤三:计算一个批次的大小
+             *      在消息的大小和批次的大小之间取一个最大值,用这个值作为当前这个批次的大小去分配内存
+             *      有可能我们的消息的大小比一个设定好的批次的大小还要大
+             *      批次 RecordBatch的大小默认值是16KB
              *
-             *
+             *      TODO 注意:这里可以得到一个启示
+             *       如果我们生产者发送数据的时候,发送的消息大小都超过16K,说明其实就是一条消息一个批次,也就是说消息是一条一条被发送出去的.
+             *       如果是这样的话,批次这个概念的设计就没有意义了!!!
+             *       所以大家一定要根据自己公司的数据大小的情况去设定批次的大小!!!
              */
-
             int size = Math.max(this.batchSize, Records.LOG_OVERHEAD + Record.recordSize(key, value));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {}", size, tp.topic(), tp.partition());
 
@@ -226,7 +234,9 @@ public final class RecordAccumulator {
                 /**
                  * 步骤五:
                  *      尝试把消息数据写入到该批次里面
-                 *
+                 *      代码第一次执行到这儿的时候,依然还是失败的
+                 *      因为前面虽然分配了内存buffer,但是还没有创建批次,因为数据是存入到批次里面的
+                 *      所以还是不能将据添加到队列的批次中,无法写入,依然返回的是 null.
                  */
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, callback, dq);
 
@@ -242,10 +252,11 @@ public final class RecordAccumulator {
 
                 /**
                  * 步骤六:
-                 *      根据内存大小封装批次batch
+                 *      步骤五没有返回null的话就会执行到这,根据分配的内存大小buffer封装批次 RecordBatch
                  */
                 MemoryRecords records = MemoryRecords.emptyRecords(buffer, compression, this.batchSize);
                 RecordBatch batch = new RecordBatch(tp, records, time.milliseconds());
+                //TODO 再次执行 tryAppend方法添加消息到批次中,到这里代码就会执行成功,消息成功写入到了批次中
                 FutureRecordMetadata future = Utils.notNull(batch.tryAppend(timestamp, key, value, callback, time.milliseconds()));
 
                 /**
@@ -257,6 +268,7 @@ public final class RecordAccumulator {
                 return new RecordAppendResult(future, dq.size() > 1 || batch.records.isFull(), true);
             }//TODO 释放锁(分段加锁的思想)
         } finally {
+            //JUC原子类
             appendsInProgress.decrementAndGet();
         }
     }
@@ -266,12 +278,17 @@ public final class RecordAccumulator {
      * resources (like compression streams buffers).
      */
     private RecordAppendResult tryAppend(long timestamp, byte[] key, byte[] value, Callback callback, Deque<RecordBatch> deque) {
+        //首先要获取队列里面最后一个批次
         RecordBatch last = deque.peekLast();
+        //如果不为空,就把数据插入到批次 RecordBatch中
+        //场景驱动第一次进来的时候,last肯定是null,所以刚开始执行这个方法返回的是 null.
         if (last != null) {
+            //将数据插入批次中
             FutureRecordMetadata future = last.tryAppend(timestamp, key, value, callback, time.milliseconds());
             if (future == null)
                 last.records.close();
             else
+                //返回值就不为Null了
                 return new RecordAppendResult(future, deque.size() > 1 || last.records.isFull(), false);
         }
         return null;
@@ -479,12 +496,17 @@ public final class RecordAccumulator {
      * Get the deque for the given topic-partition, creating it if necessary.
      */
     private Deque<RecordBatch> getOrCreateDeque(TopicPartition tp) {
+        //直接从 batches里面获取当前分区对应的队列
         Deque<RecordBatch> d = this.batches.get(tp);
+        //如果之前已经有这个分区对应的队列,直接返回队列,显然第一次发送时候是没有队列的
         if (d != null)
             return d;
+        //构建一下新的队列
         d = new ArrayDeque<>();
+        //把这个新的队列添加到 batches这个数据结构里面
         Deque<RecordBatch> previous = this.batches.putIfAbsent(tp, d);
         if (previous == null)
+            //返回新的结果
             return d;
         else
             return previous;
