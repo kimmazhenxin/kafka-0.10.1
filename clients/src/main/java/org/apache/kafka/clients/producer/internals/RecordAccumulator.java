@@ -178,6 +178,7 @@ public final class RecordAccumulator {
              * 步骤一: 先根据分区对象找到应该插入到哪个队列里面
              *      如果有已经存在的队列,那么就使用存在的列;否则新创建一个队列
              *      注意: 一个分区对应一个队列
+             * TODO 其实这段代码虽然没加锁,但是也是线程安全的,具体看CopyOnWrite数据结构,使用了读写分离的思想
              */
             Deque<RecordBatch> dq = getOrCreateDeque(tp);//分区对应的队列
 
@@ -220,7 +221,7 @@ public final class RecordAccumulator {
 
             /**
              * 步骤四:
-             *      根据上述的size值分配该批次的内存大小(内存池)
+             *      根据上述的size值分配该批次的内存大小(内存池申请,防止FullGC)
              */
             ByteBuffer buffer = free.allocate(size, maxTimeToBlock);
 
@@ -497,6 +498,7 @@ public final class RecordAccumulator {
      */
     private Deque<RecordBatch> getOrCreateDeque(TopicPartition tp) {
         //直接从 batches里面获取当前分区对应的队列
+        //TODO batches这个数据结构是线程安全的,具体看CopyOnWrite这个核心类的设计
         Deque<RecordBatch> d = this.batches.get(tp);
         //如果之前已经有这个分区对应的队列,直接返回队列,显然第一次发送时候是没有队列的
         if (d != null)

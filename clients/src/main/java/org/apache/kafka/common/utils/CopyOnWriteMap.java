@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentMap;
  *  3) 这样的一个数据结构,最适合的场景就是读多写少的场景,这时候读数据的性能很高.
  *
  *
- *  我们目前的场景绝对是读多写少的场景,分析如下:
+ *  我们目前的Kafka场景绝对是读多写少的场景,分析如下:
  *    假设我们有100个partition,那么也只需要往这个batches数据结构里面写入100次的KV值(TopicPartition,Deque<RecordBatch>),即调用100次put方法,
  *    但是如果我们有1亿条数据,那么它需要调用batches数据结构中一亿次的get方法获取Value值Deque,然后将数据写入队列里的RecordBatch批次里
  *    很明显这是读多写少的场景.
@@ -138,7 +138,7 @@ public class CopyOnWriteMap<K, V> implements ConcurrentMap<K, V> {
         V prev = copy.put(k, v);
         //赋值给map,由于map是volatile修饰的,能保证这一步map改变后其它线程的可见性
         //TODO
-        // 关于Collections.unmodifiableMap(copy):
+        //  关于Collections.unmodifiableMap(map):
         //  该方法返回了一个map的不可修改的视图umap,
         //  为用户提供了一种生成只读容器的方法。如果尝试修改该容器umap, 将会抛出UnsupportedOperationException异常。
         this.map = Collections.unmodifiableMap(copy);

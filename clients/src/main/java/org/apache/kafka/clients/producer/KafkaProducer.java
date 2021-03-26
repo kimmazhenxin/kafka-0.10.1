@@ -553,6 +553,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             /**
              * TODO 非常重要!!!
              *  步骤七: 把消息放入Accumulator消息缓冲区(32M的一个内存)中,然后由Accumulator把消息封装成一个批次一个批次的去发送
+             *  append:是高并发方法,同时要保证线程安全,很巧妙地使用了分段加锁而并不是使用synchronized这种粗粒度地修饰方法.
              */
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey, serializedValue, interceptCallback, remainingWaitMs);
             //TODO 如果批次满了,或者新建出来一个批次,那么唤醒 sender线程去发送消息
