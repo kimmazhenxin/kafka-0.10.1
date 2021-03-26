@@ -66,7 +66,7 @@ public final class RecordAccumulator {
     private final CompressionType compression;
     private final long lingerMs;
     private final long retryBackoffMs;
-    private final BufferPool free;  //TODO 核心:内存池
+    private final BufferPool free;  //TODO 核心:内存池结构
     private final Time time;
 
     // TopicPartition -> 分区    Deque -> 队列, 每个分区对应一个队列,每个队列里面有对个批次(一个分区发送多批次数据)
