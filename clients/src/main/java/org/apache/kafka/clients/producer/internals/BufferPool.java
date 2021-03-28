@@ -16,19 +16,19 @@
  */
 package org.apache.kafka.clients.producer.internals;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
-
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.metrics.stats.Rate;
 import org.apache.kafka.common.utils.Time;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 
 /**
@@ -49,6 +49,7 @@ public final class BufferPool {//内存池,缓冲池
     //TODO 内存池就是一个队列,队列里面放的就是一块一块的内存ByteBuffer,和连接池一个道理
     // 可以实现对内存的复用,降低FullGC的概率
     private final Deque<ByteBuffer> free;
+    // 存储正在等待分配的内存线程,只要这个有值,就代表此时内存池中的内存分配不够
     private final Deque<Condition> waiters;
     private long availableMemory;
     private final Metrics metrics;
@@ -139,7 +140,7 @@ public final class BufferPool {//内存池,缓冲池
                 //JUC包,Condition用于线程间的通信
                 Condition moreMemory = this.lock.newCondition();
                 long remainingTimeToBlockNs = TimeUnit.MILLISECONDS.toNanos(maxTimeToBlockMs);
-                //等待别人释放内存
+                //等待别人释放内存.只要这个有值,说明此时内存池内存不够,线程只能等待分配内存
                 this.waiters.addLast(moreMemory);
                 // loop over and over until we have a buffer or have reserved
                 // enough memory to allocate one
@@ -156,7 +157,7 @@ public final class BufferPool {//内存池,缓冲池
                     try {
                         //在等待,等待别人释放内存
                         //如果这儿的代码是等待wait操作,那么可以想一下当有人释放内存的时候,肯定得唤醒这里的代码
-                        //两种情况代码会继续往下执行: 1) 等待时间到了 2) 别人释放内存,然后被唤醒
+                        //两种情况代码会继续往下执行: 1) 等待时间到了 2) 别人释放内存,然后被唤醒(参见deallocate方法中,释放完内存后会调用signal唤醒等待分配内存的线程)
                         waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
                     } catch (InterruptedException e) {
                         this.waiters.remove(moreMemory);
@@ -240,20 +241,29 @@ public final class BufferPool {//内存池,缓冲池
     public void deallocate(ByteBuffer buffer, int size) {
         lock.lock();
         try {
+            //申请的内存buffer恰好等于默认的poolableSize大小(即一个批次的大小16KB),那么将该buffer添加到内存池队列中
             if (size == this.poolableSize && size == buffer.capacity()) {
+                //TODO 清空buffer数据
                 buffer.clear();
+                //TODO 将buffer添加到内存池的队列中,等待下次其它线程申请复用
                 this.free.add(buffer);
             } else {
+                //申请的内存buffer不等于默认的大小16KB,也就是说一条消息的大小超过了poolableSize,那么将该buffer大小直接添加到availableMemory中,归为可用内存
+                //这时候等着垃圾回收即可
                 this.availableMemory += size;
             }
             Condition moreMem = this.waiters.peekFirst();
             if (moreMem != null)
+                //TODO 重要点!!!
+                // 释放内存或者回收内存以后,都会唤醒等待内存的线程
+                // 接下来就要唤醒正在等待分配内存的线程
                 moreMem.signal();
         } finally {
             lock.unlock();
         }
     }
 
+    //释放内存池内存
     public void deallocate(ByteBuffer buffer) {
         deallocate(buffer, buffer.capacity());
     }

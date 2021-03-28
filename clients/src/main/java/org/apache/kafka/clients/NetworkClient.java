@@ -148,14 +148,16 @@ public class NetworkClient implements KafkaClient {
      */
     @Override
     public boolean ready(Node node, long now) {
+        //如果当前检查的节点为null,那么抛异常
         if (node.isEmpty())
             throw new IllegalArgumentException("Cannot connect to empty node " + node);
-
+        //判断要发送消息的主机是否具备发送消息的条件(第一次进来的时候不具备,返回false)
         if (isReady(node, now))
             return true;
-
+        //判断是否可以尝试去建立网络连接
         if (connectionStates.canConnect(node.idString(), now))
             // if we are interested in sending to a node and we don't have a connection to it, initiate one
+            //初始化连接,本质就是绑定了连接事件而已(OP_CONNECT)
             initiateConnect(node, now);
 
         return false;
@@ -212,6 +214,7 @@ public class NetworkClient implements KafkaClient {
     public boolean isReady(Node node, long now) {
         // if we need to update our metadata now declare all requests unready to make metadata requests first
         // priority
+        // TODO 注意:我们要发送写数据请求的时候,不能是正在更新元数据的时候(也就是当前的producer不能处于更新元数据状态)!!!
         return !metadataUpdater.isUpdateDue(now) && canSendRequest(node.idString());
     }
 
@@ -221,6 +224,17 @@ public class NetworkClient implements KafkaClient {
      * @param node The node
      */
     private boolean canSendRequest(String node) {
+        /**
+         * TODO 条件判断:
+         *  connectionStates.isConnected(node):
+         *   生产者:多个连接,缓存多个连接(跟集群的broker节点数是一样的),判断缓存里面是否已经把这个连接给建立好了
+         *  selector.isChannelReady(node):
+         *   Java NIO: selector
+         *   selector -> 绑定了多个KafkaChannel(实际即使 Java SocketChannel)
+         *   一个KafkaChannel就代表一个连接
+         *  inFlightRequests.canSendMore(node):
+         *   每个往broker主机上面发送消息的连接,最多能容忍5个请求发送出去了但是还没有接收到响应(这个参数在KafkaProducer初始化时候已经设置了)
+         */
         return connectionStates.isConnected(node) && selector.isChannelReady(node) && inFlightRequests.canSendMore(node);
     }
 

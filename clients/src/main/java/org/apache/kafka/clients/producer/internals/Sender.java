@@ -167,7 +167,7 @@ public class Sender implements Runnable {
     void run(long now) {
 
         /**
-         *
+         * 步骤一:获取元数据
          * (1) 代码第一次执行:
          * 获取元数据,根据场景驱动的方式.第一次代码进来,肯定还没有获取到元数据
          * 所以这个cluster里面没有元数据,如果这儿没有元数据,这个方法里面接下来的代码就不用看了,因为接下来的这些代码都依赖这个元数据
@@ -176,22 +176,22 @@ public class Sender implements Runnable {
          * (2) 代码第二次执行:
          * 场景驱动的方式,第二次代码进来
          * 第二次进来的时候,已经有元数据了,所以cluster这儿有元数据
-         *
-         * 步骤一:获取元数据
          */
         Cluster cluster = metadata.fetch();
         // get the list of partitions with data ready to send
 
         /**
-         * 步骤二:
-         *      判断哪些partition有消息可以发送
+         * 步骤二:判断哪些partition有消息可以发送,会进行判断哪些批次可以发送了,这个代码会涉及到批次被发送出去的条件!!!
          *      场景驱动的方式,第一次代码进来的时候,这个步骤不会执行,因为没有元数据
+         *
+         *      结果:获取到要发送消息的主机
+         *
          */
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
         /**
-         * 步骤三:标识还没有拉取到元数据的Topic
+         * 步骤三:标识还没有拉取到元数据的Topic(为了容错)
          *
          */
         if (!result.unknownLeaderTopics.isEmpty()) {

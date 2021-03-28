@@ -12,14 +12,8 @@
  */
 package org.apache.kafka.clients.producer.internals;
 
-import java.util.Iterator;
-
 import org.apache.kafka.clients.producer.Callback;
-import org.apache.kafka.common.Cluster;
-import org.apache.kafka.common.MetricName;
-import org.apache.kafka.common.Node;
-import org.apache.kafka.common.PartitionInfo;
-import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.*;
 import org.apache.kafka.common.metrics.Measurable;
 import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
@@ -36,15 +30,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -221,7 +207,7 @@ public final class RecordAccumulator {
 
             /**
              * 步骤四:
-             *      根据上述的size值分配该批次的内存大小(内存池申请,防止FullGC)
+             *      根据上述的size值分配该批次的内存大小(内存池申请,降低FullGC频率)
              */
             ByteBuffer buffer = free.allocate(size, maxTimeToBlock);
 
@@ -246,7 +232,7 @@ public final class RecordAccumulator {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
 
                     // 线程二到这里,其实它自己已经把数据写到了队列的批次里,所以它之前申请的内存buffer就不需要了
-                    // 释放内存,它的内存就没什么作用了,把这个内存释放还给内存池
+                    // 回收内存,它的内存就没什么作用了,把这个内存回收还给内存池
                     free.deallocate(buffer);
                     return appendResult;
                 }
@@ -377,28 +363,89 @@ public final class RecordAccumulator {
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<String> unknownLeaderTopics = new HashSet<>();
 
+        //waiters里面有数据,说明我们的内存池里面内存不够了
+        //如果exhausted的值等于true,说明内存池里面的内存不够用了
         boolean exhausted = this.free.queued() > 0;
-        for (Map.Entry<TopicPartition, Deque<RecordBatch>> entry : this.batches.entrySet()) {
-            TopicPartition part = entry.getKey();
-            Deque<RecordBatch> deque = entry.getValue();
 
+        //遍历所有的分区信息
+        for (Map.Entry<TopicPartition, Deque<RecordBatch>> entry : this.batches.entrySet()) {
+            //获取到分区
+            TopicPartition part = entry.getKey();
+            //获取到分区对应的队列
+            Deque<RecordBatch> deque = entry.getValue();
+            //根据分区可以获取到这个分区的Leader Partition在哪一台broker上面
             Node leader = cluster.leaderFor(part);
             synchronized (deque) {
+                //如果没有找到对应主机
                 if (leader == null && !deque.isEmpty()) {
                     // This is a partition for which leader is not known, but messages are available to send.
                     // Note that entries are currently not removed from batches when deque is empty.
                     unknownLeaderTopics.add(part.topic());
                 } else if (!readyNodes.contains(leader) && !muted.contains(part)) {
+                    //首先从队列的队头部获取批次
                     RecordBatch batch = deque.peekFirst();
+                    //如果这个batch不为null,判断是否可以发送这个批次
                     if (batch != null) {
+                        /**
+                         * 接下来就判断这个批次是否符合发送出去的条件
+                         * batch.attempts: 重试次数
+                         * batch.lastAttemptMs: 上一次重试的时间
+                         * retryBackoffMs: 重试的时间间隔
+                         * backingOff:  代表重新发送数据的时间到了
+                         *
+                         * 场景驱动的方式,在第一次发送消息的时候肯定还没有到重试的地步
+                         */
                         boolean backingOff = batch.attempts > 0 && batch.lastAttemptMs + retryBackoffMs > nowMs;
+                        /**
+                         * nowMs: 当前时间
+                         * batch.lastAttemptMs: 上一次重试的时间
+                         * waitedTimeMs:这个批次已经等了多久了
+                         */
                         long waitedTimeMs = nowMs - batch.lastAttemptMs;
+                        /**
+                         * 场景驱动的方式分析,在第一次发送消息的时候,之前就没有消息发送出去过,压根也就没有重试这一说
+                         * backingOff:代表重新发送数据的时间到了
+                         * lingerMs: 批次发送的最短时间(重要参数,一定要自己设置这个参数值),默认值是0代表着来一条消息就发送一条消息,那很明显是不合适的,这里设置为100ms
+                         * timeToWaitMs:此时就等于 lingerMs = 100ms
+                         * 消息存多久就必须要发送出去了
+                         */
                         long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs;
+                        /**
+                         * timeToWaitMs: 最多能等待多久
+                         * waitedTimeMs: 已经等待了多久
+                         * timeLeftMs:   还要再等待多久
+                         */
                         long timeLeftMs = Math.max(timeToWaitMs - waitedTimeMs, 0);
+                        /**
+                         * TODO 重点条件!!!
+                         *  deque.size() > 1:
+                         *      如果队列大小大于1,说明这个队列里面至少有一个批次肯定是写满了.如果批次写满了,那么这时候肯定就可以发送数据了
+                         *  isFull:
+                         *      是否有写满的批次.有可能队列里面只有一个批次,然后刚好这个批次写满了,那么这时候也是可以发送数据了
+                         *
+                         *  full: 是否有写满了批次(包含上面两种情况)
+                         */
                         boolean full = deque.size() > 1 || batch.records.isFull();
+                        /**
+                         * waitedTimeMs: 已经等待了多久
+                         * timeToWaitMs: 最多能等待多久
+                         * expired:      时间到了,到了发送消息的时候了
+                         * 如果expired = true,代表就是时间到了,到了发送消息的时候了
+                         */
                         boolean expired = waitedTimeMs >= timeToWaitMs;
+                        /**
+                         * TODO 发送消息条件的判断,最重要的就是前三个.
+                         *  1) full:      是否有写满了批次(无论时间到没到)
+                         *  2) expired:   时间到了(无论批次写没写满,没写满也得发送)
+                         *  3) exhausted: 内存不够(消息发送出去以后,就会释放内存,提高效率)
+                         *  4) flushInProgress:线程等待刷新
+                         *  5) closed:    关闭Producer时也要把内存中的消息发送出去
+                         */
                         boolean sendable = full || expired || exhausted || closed || flushInProgress();
+                        //可以发送消息了
                         if (sendable && !backingOff) {
+                            //把可以发送批次的Partition的Leader Partition所在的broker加入到readNodes这个数据结构中
+                            //这时候已经计算出来要发送消息的主机有哪些了
                             readyNodes.add(leader);
                         } else {
                             // Note that this results in a conservative estimate since an un-sendable partition may have
